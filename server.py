@@ -113,7 +113,6 @@ def _build_config(
     image_cfg_kwargs = {
         "aspect_ratio": aspect_ratio,
         "image_size": image_size,
-        "number_of_images": number_of_images,
     }
     if person_generation is not None:
         image_cfg_kwargs["person_generation"] = person_generation
@@ -121,6 +120,7 @@ def _build_config(
     config_kwargs = {
         "response_modalities": ["TEXT", "IMAGE"],
         "image_config": types.ImageConfig(**image_cfg_kwargs),
+        "number_of_images": number_of_images,
     }
 
     if temperature is not None:
