@@ -120,7 +120,7 @@ def _build_config(
     config_kwargs = {
         "response_modalities": ["TEXT", "IMAGE"],
         "image_config": types.ImageConfig(**image_cfg_kwargs),
-        "number_of_images": number_of_images,
+        "candidate_count": number_of_images,
     }
 
     if temperature is not None:
