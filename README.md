@@ -337,5 +337,5 @@ PermissionError: [Errno 13] Permission denied
 
 ---
 
-Author: Terry.Kim <th.kim@lgdisplay.com>
+Author: Terry kim <goandonh@gmail.com>
 Co-Author: Claudie

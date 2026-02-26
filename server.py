@@ -4,7 +4,7 @@ Nano Banana Pro MCP Server - Image generation and editing via Vertex AI.
 Provides MCP tools for generating and editing images using Google's
 Gemini 3 Pro Image (Nano Banana Pro) model through the Vertex AI API.
 
-Author: Terry.Kim <th.kim@lgdisplay.com>
+Author: Terry kim <goandonh@gmail.com>
 Co-Author: Claudie
 """
 
@@ -94,7 +94,7 @@ def _save_image(image_data: bytes, prefix: str = "generated") -> str:
     out_dir = _ensure_output_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     short_id = uuid.uuid4().hex[:6]
-    filename = f"{prefix}_{timestamp}_{short_id}.png"
+    filename = f"{prefix}_{timestamp}_{short_id}.jpg"
     filepath = out_dir / filename
     filepath.write_bytes(image_data)
     return str(filepath)
@@ -113,6 +113,8 @@ def _build_config(
     image_cfg_kwargs = {
         "aspect_ratio": aspect_ratio,
         "image_size": image_size,
+        "output_mime_type": "image/jpeg",
+        "output_compression_quality": 85,
     }
     if person_generation is not None:
         image_cfg_kwargs["person_generation"] = person_generation
