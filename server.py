@@ -843,4 +843,4 @@ def get_supported_options() -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio", show_banner=False)
+    mcp.run(transport="stdio")
