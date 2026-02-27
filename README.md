@@ -337,5 +337,5 @@ PermissionError: [Errno 13] Permission denied
 
 ---
 
-Author: Terry kim <goandonh@gmail.com>
+Author: Terry.Kim <goandonh@gmail.com>
 Co-Author: Claudie
