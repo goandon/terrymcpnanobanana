@@ -216,15 +216,16 @@ def _build_config(
     image_cfg_kwargs = {
         "aspect_ratio": aspect_ratio,
         "image_size": image_size,
-        # NOTE: output_mime_type and output_compression_quality are Vertex AI only.
-        # They are silently ignored when using Gemini API key mode.
-        "output_mime_type": OUTPUT_MIME_TYPE,
-        "output_compression_quality": OUTPUT_COMPRESSION_QUALITY,
     }
-    if person_generation is not None:
-        image_cfg_kwargs["person_generation"] = person_generation
-    if prominent_people is not None:
-        image_cfg_kwargs["prominent_people"] = prominent_people
+
+    # These parameters are Vertex AI only — the SDK raises errors in API key mode.
+    if USE_VERTEX_AI:
+        image_cfg_kwargs["output_mime_type"] = OUTPUT_MIME_TYPE
+        image_cfg_kwargs["output_compression_quality"] = OUTPUT_COMPRESSION_QUALITY
+        if person_generation is not None:
+            image_cfg_kwargs["person_generation"] = person_generation
+        if prominent_people is not None:
+            image_cfg_kwargs["prominent_people"] = prominent_people
 
     config_kwargs = {
         "response_modalities": ["TEXT", "IMAGE"],
