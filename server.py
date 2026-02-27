@@ -1,10 +1,14 @@
 """
-Nano Banana Pro MCP Server - Image generation and editing via Vertex AI.
+Nano Banana MCP Server - Image generation and editing via Vertex AI.
 
 Provides MCP tools for generating and editing images using Google's
-Gemini 3 Pro Image (Nano Banana Pro) model through the Vertex AI API.
+Nano Banana models (Pro and Flash/Nano Banana 2) through the Vertex AI API.
 
-Author: Terry kim <goandonh@gmail.com>
+Supported models:
+  - Nano Banana 2 (Gemini 3.1 Flash Image) — fast, cost-effective (default)
+  - Nano Banana Pro (Gemini 3 Pro Image) — highest quality
+
+Author: Terry.Kim <goandonh@gmail.com>
 Co-Author: Claudie
 """
 
@@ -24,7 +28,12 @@ from google.genai import types
 # Configuration
 # ---------------------------------------------------------------------------
 
-MODEL_ID = "gemini-3-pro-image-preview"
+# Model registry
+MODELS = {
+    "flash": "gemini-3.1-flash-image-preview",  # Nano Banana 2 (default)
+    "pro": "gemini-3-pro-image-preview",         # Nano Banana Pro
+}
+DEFAULT_MODEL = "flash"
 
 # Output directory for generated images (override with env var)
 OUTPUT_DIR = Path(os.environ.get(
@@ -37,20 +46,36 @@ VERTEX_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
 VERTEX_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
 USE_VERTEX_AI = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "true").lower() == "true"
 
-# Valid option values
-VALID_ASPECT_RATIOS = {"1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"}
-VALID_IMAGE_SIZES = {"1K", "2K", "4K"}
+# Valid option values (model-specific)
+VALID_ASPECT_RATIOS_FLASH = {
+    "1:1", "1:4", "1:8", "2:3", "3:2", "3:4",
+    "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9",
+}
+VALID_ASPECT_RATIOS_PRO = {"1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"}
+
+VALID_IMAGE_SIZES_FLASH = {"512px", "1K", "2K", "4K"}
+VALID_IMAGE_SIZES_PRO = {"1K", "2K", "4K"}
+
+VALID_THINKING_LEVELS = {"minimal", "High"}
+
 VALID_PERSON_GENERATION = {
     "DONT_ALLOW",
+    "ALLOW_NONE",  # SDK alias for DONT_ALLOW
     "ALLOW_ADULT",
     "ALLOW_ALL",
 }
+VALID_PROMINENT_PEOPLE = {"ALLOW", "DENY"}
 VALID_SAFETY_LEVELS = {
     "BLOCK_LOW_AND_ABOVE",
     "BLOCK_MEDIUM_AND_ABOVE",
     "BLOCK_ONLY_HIGH",
     "BLOCK_NONE",
 }
+VALID_OUTPUT_FORMATS = {"file", "base64"}
+
+# Image output defaults
+OUTPUT_MIME_TYPE = "image/jpeg"
+OUTPUT_COMPRESSION_QUALITY = 85
 
 MIME_MAP = {
     ".png": "image/png",
@@ -83,6 +108,78 @@ def _get_client() -> genai.Client:
     return _client
 
 
+def _resolve_model(model: str) -> str:
+    """Resolve a short model key ('flash'/'pro') to the full model ID."""
+    key = model.lower().strip()
+    if key not in MODELS:
+        raise ValueError(
+            f"Unknown model '{model}'. Valid options: {sorted(MODELS.keys())}"
+        )
+    return MODELS[key]
+
+
+def _validate_params(
+    model_key: str,
+    aspect_ratio: str,
+    image_size: str,
+    output_format: str = "file",
+    person_generation: Optional[str] = None,
+    prominent_people: Optional[str] = None,
+    safety_level: Optional[str] = None,
+    thinking_level: Optional[str] = None,
+    number_of_images: int = 1,
+    temperature: Optional[float] = None,
+) -> list[str]:
+    """Validate parameters against allowed values. Returns list of errors."""
+    errors = []
+    is_flash = model_key.lower() == "flash"
+    valid_ratios = VALID_ASPECT_RATIOS_FLASH if is_flash else VALID_ASPECT_RATIOS_PRO
+    valid_sizes = VALID_IMAGE_SIZES_FLASH if is_flash else VALID_IMAGE_SIZES_PRO
+
+    if aspect_ratio not in valid_ratios:
+        errors.append(
+            f"Invalid aspect_ratio '{aspect_ratio}' for {model_key}. "
+            f"Valid: {sorted(valid_ratios)}"
+        )
+    if image_size not in valid_sizes:
+        errors.append(
+            f"Invalid image_size '{image_size}' for {model_key}. "
+            f"Valid: {sorted(valid_sizes)}"
+        )
+    if output_format not in VALID_OUTPUT_FORMATS:
+        errors.append(
+            f"Invalid output_format '{output_format}'. Valid: {sorted(VALID_OUTPUT_FORMATS)}"
+        )
+    if person_generation is not None and person_generation not in VALID_PERSON_GENERATION:
+        errors.append(
+            f"Invalid person_generation '{person_generation}'. "
+            f"Valid: {sorted(VALID_PERSON_GENERATION)}"
+        )
+    if prominent_people is not None and prominent_people not in VALID_PROMINENT_PEOPLE:
+        errors.append(
+            f"Invalid prominent_people '{prominent_people}'. "
+            f"Valid: {sorted(VALID_PROMINENT_PEOPLE)}"
+        )
+    if safety_level is not None and safety_level not in VALID_SAFETY_LEVELS:
+        errors.append(
+            f"Invalid safety_level '{safety_level}'. Valid: {sorted(VALID_SAFETY_LEVELS)}"
+        )
+    if thinking_level is not None:
+        if not is_flash:
+            errors.append("thinking_level is only supported with the 'flash' model.")
+        elif thinking_level not in VALID_THINKING_LEVELS:
+            errors.append(
+                f"Invalid thinking_level '{thinking_level}'. "
+                f"Valid: {sorted(VALID_THINKING_LEVELS)}"
+            )
+    if not 1 <= number_of_images <= 4:
+        errors.append(f"number_of_images must be 1-4, got {number_of_images}.")
+    if temperature is not None and not 0.0 <= temperature <= 2.0:
+        errors.append(f"temperature must be 0.0-2.0, got {temperature}.")
+
+    return errors
+
+
 def _ensure_output_dir() -> Path:
     """Ensure the output directory exists and return its path."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -101,23 +198,33 @@ def _save_image(image_data: bytes, prefix: str = "generated") -> str:
 
 
 def _build_config(
+    model_key: str = DEFAULT_MODEL,
     aspect_ratio: str = "1:1",
     image_size: str = "1K",
     number_of_images: int = 1,
     person_generation: Optional[str] = None,
+    prominent_people: Optional[str] = None,
     temperature: Optional[float] = None,
     seed: Optional[int] = None,
     safety_level: Optional[str] = None,
+    thinking_level: Optional[str] = None,
+    use_search: bool = False,
 ) -> types.GenerateContentConfig:
     """Build GenerateContentConfig with full ImageConfig options."""
+    is_flash = model_key.lower() == "flash"
+
     image_cfg_kwargs = {
         "aspect_ratio": aspect_ratio,
         "image_size": image_size,
-        "output_mime_type": "image/jpeg",
-        "output_compression_quality": 85,
+        # NOTE: output_mime_type and output_compression_quality are Vertex AI only.
+        # They are silently ignored when using Gemini API key mode.
+        "output_mime_type": OUTPUT_MIME_TYPE,
+        "output_compression_quality": OUTPUT_COMPRESSION_QUALITY,
     }
     if person_generation is not None:
         image_cfg_kwargs["person_generation"] = person_generation
+    if prominent_people is not None:
+        image_cfg_kwargs["prominent_people"] = prominent_people
 
     config_kwargs = {
         "response_modalities": ["TEXT", "IMAGE"],
@@ -150,6 +257,24 @@ def _build_config(
             ),
         ]
 
+    # Flash-only: thinking configuration
+    if is_flash and thinking_level is not None:
+        config_kwargs["thinking_config"] = types.ThinkingConfig(
+            thinking_level=thinking_level,
+            include_thoughts=True,
+        )
+
+    # Flash-only: Google Search grounding (web + image search)
+    if is_flash and use_search:
+        config_kwargs["tools"] = [types.Tool(
+            google_search=types.GoogleSearch(
+                search_types=types.SearchTypes(
+                    web_search=types.WebSearch(),
+                    image_search=types.ImageSearch(),
+                )
+            )
+        )]
+
     return types.GenerateContentConfig(**config_kwargs)
 
 
@@ -157,8 +282,13 @@ def _extract_results(response, output_format: str, prefix: str) -> dict:
     """Extract text and images from a generate_content response."""
     images = []
     text = ""
+    thought = ""
 
     for part in response.candidates[0].content.parts:
+        # Skip thinking/thought parts (Flash model with thinking enabled)
+        if hasattr(part, "thought") and part.thought:
+            thought += part.text or ""
+            continue
         if part.text:
             text += part.text
         elif part.inline_data:
@@ -177,45 +307,58 @@ def _extract_results(response, output_format: str, prefix: str) -> dict:
                     "mime_type": part.inline_data.mime_type,
                 })
 
-    return {"images": images, "text": text}
+    result = {"images": images, "text": text}
+    if thought:
+        result["thinking"] = thought
+    return result
 
 
 # ---------------------------------------------------------------------------
 # MCP Server
 # ---------------------------------------------------------------------------
 
-mcp = FastMCP("nanobanana-pro")
+mcp = FastMCP("nanobanana")
 
 
 @mcp.tool()
 def generate_image(
     prompt: str,
+    model: str = DEFAULT_MODEL,
     aspect_ratio: str = "1:1",
     image_size: str = "1K",
     number_of_images: int = 1,
     person_generation: Optional[str] = None,
+    prominent_people: Optional[str] = None,
     temperature: Optional[float] = None,
     seed: Optional[int] = None,
     safety_level: Optional[str] = None,
+    thinking_level: Optional[str] = None,
+    use_search: bool = False,
     output_format: str = "file",
 ) -> str:
-    """Generate an image from a text prompt using Nano Banana Pro (Gemini 3 Pro Image).
+    """Generate an image from a text prompt using Nano Banana models.
 
-    Creates high-fidelity images with reasoning-enhanced composition,
-    legible text rendering, and up to 4K resolution.
+    Supports two models:
+      - "flash" (default): Nano Banana 2 (Gemini 3.1 Flash Image) — fast, cost-effective
+      - "pro": Nano Banana Pro (Gemini 3 Pro Image) — highest quality
 
     Args:
         prompt: Text description of the image to generate.
                 Be specific about style, composition, lighting, and details.
+        model: Model to use. "flash" (default, Nano Banana 2) or "pro" (Nano Banana Pro).
         aspect_ratio: Aspect ratio of the output image.
-                      Options: "1:1", "2:3", "3:2", "3:4", "4:3",
-                      "9:16", "16:9", "21:9". Default: "1:1".
-        image_size: Output resolution. Options: "1K", "2K", "4K".
-                    Default: "1K".
+                      Common: "1:1", "16:9", "9:16", "3:2", "2:3", "4:3", "3:4", "21:9".
+                      Flash also supports: "1:4", "4:1", "1:8", "8:1", "4:5", "5:4".
+                      Default: "1:1".
+        image_size: Output resolution. "1K", "2K", "4K".
+                    Flash also supports "512px". Default: "1K".
         number_of_images: Number of images to generate (1-4). Default: 1.
         person_generation: Controls people generation.
-                           Options: "DONT_ALLOW", "ALLOW_ADULT", "ALLOW_ALL".
+                           Options: "DONT_ALLOW"/"ALLOW_NONE", "ALLOW_ADULT", "ALLOW_ALL".
                            Default: model default (None).
+        prominent_people: Controls celebrity/prominent person generation separately.
+                          Options: "ALLOW", "DENY". Overridden by person_generation
+                          if both are set. Default: None.
         temperature: Controls randomness (0.0-2.0). Google recommends 1.0
                      for image generation. Default: model default (None).
         seed: Random seed for reproducible results. Use the same seed
@@ -223,26 +366,46 @@ def generate_image(
         safety_level: Safety filter threshold applied to all harm categories.
                       Options: "BLOCK_LOW_AND_ABOVE", "BLOCK_MEDIUM_AND_ABOVE",
                       "BLOCK_ONLY_HIGH", "BLOCK_NONE". Default: model default (None).
+        thinking_level: (Flash only) Thinking effort level.
+                        "minimal" (default) or "High" for better composition.
+                        Thinking tokens incur charges. Default: None (off).
+        use_search: (Flash only) Enable Google Search grounding (web + image)
+                    for accurate rendering of real subjects/places. Default: False.
         output_format: "file" to save to disk and return path,
-                       "base64" to return base64-encoded PNG data. Default: "file".
+                       "base64" to return base64-encoded data. Default: "file".
 
     Returns:
         JSON with generated image path(s) (or base64 data), model response text,
         and metadata.
     """
+    model_id = _resolve_model(model)
+    errors = _validate_params(
+        model_key=model, aspect_ratio=aspect_ratio, image_size=image_size,
+        output_format=output_format, person_generation=person_generation,
+        prominent_people=prominent_people, safety_level=safety_level,
+        thinking_level=thinking_level, number_of_images=number_of_images,
+        temperature=temperature,
+    )
+    if errors:
+        return json.dumps({"errors": errors})
+
     client = _get_client()
     config = _build_config(
+        model_key=model,
         aspect_ratio=aspect_ratio,
         image_size=image_size,
         number_of_images=number_of_images,
         person_generation=person_generation,
+        prominent_people=prominent_people,
         temperature=temperature,
         seed=seed,
         safety_level=safety_level,
+        thinking_level=thinking_level,
+        use_search=use_search,
     )
 
     response = client.models.generate_content(
-        model=MODEL_ID,
+        model=model_id,
         contents=prompt,
         config=config,
     )
@@ -250,7 +413,7 @@ def generate_image(
     extracted = _extract_results(response, output_format, prefix="gen")
     result = {
         "prompt": prompt,
-        "model": MODEL_ID,
+        "model": model_id,
         "settings": {
             "aspect_ratio": aspect_ratio,
             "image_size": image_size,
@@ -260,12 +423,18 @@ def generate_image(
     }
     if person_generation:
         result["settings"]["person_generation"] = person_generation
+    if prominent_people:
+        result["settings"]["prominent_people"] = prominent_people
     if temperature is not None:
         result["settings"]["temperature"] = temperature
     if seed is not None:
         result["settings"]["seed"] = seed
     if safety_level:
         result["settings"]["safety_level"] = safety_level
+    if thinking_level:
+        result["settings"]["thinking_level"] = thinking_level
+    if use_search:
+        result["settings"]["use_search"] = True
 
     return json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -274,12 +443,16 @@ def generate_image(
 def edit_image(
     image_path: str,
     instruction: str,
+    model: str = DEFAULT_MODEL,
     aspect_ratio: str = "1:1",
     image_size: str = "1K",
     person_generation: Optional[str] = None,
+    prominent_people: Optional[str] = None,
     temperature: Optional[float] = None,
     seed: Optional[int] = None,
     safety_level: Optional[str] = None,
+    thinking_level: Optional[str] = None,
+    use_search: bool = False,
     output_format: str = "file",
 ) -> str:
     """Edit an existing image using natural language instructions.
@@ -292,26 +465,44 @@ def edit_image(
         instruction: Natural language editing instruction.
                      Examples: "Make it look like a watercolor painting",
                      "Remove the background", "Change the sky to sunset colors"
+        model: Model to use. "flash" (default, Nano Banana 2) or "pro" (Nano Banana Pro).
         aspect_ratio: Aspect ratio of the output image.
-                      Options: "1:1", "2:3", "3:2", "3:4", "4:3",
-                      "9:16", "16:9", "21:9". Default: "1:1".
-        image_size: Output resolution. Options: "1K", "2K", "4K".
-                    Default: "1K".
+                      Common: "1:1", "16:9", "9:16", "3:2", "2:3", "4:3", "3:4", "21:9".
+                      Flash also supports: "1:4", "4:1", "1:8", "8:1", "4:5", "5:4".
+                      Default: "1:1".
+        image_size: Output resolution. "1K", "2K", "4K".
+                    Flash also supports "512px". Default: "1K".
         person_generation: Controls people generation.
-                           Options: "DONT_ALLOW", "ALLOW_ADULT", "ALLOW_ALL".
+                           Options: "DONT_ALLOW"/"ALLOW_NONE", "ALLOW_ADULT", "ALLOW_ALL".
                            Default: model default (None).
+        prominent_people: Controls celebrity/prominent person generation.
+                          Options: "ALLOW", "DENY". Default: None.
         temperature: Controls randomness (0.0-2.0). Default: model default (None).
         seed: Random seed for reproducible results. Default: None.
         safety_level: Safety filter threshold applied to all harm categories.
                       Options: "BLOCK_LOW_AND_ABOVE", "BLOCK_MEDIUM_AND_ABOVE",
                       "BLOCK_ONLY_HIGH", "BLOCK_NONE". Default: model default (None).
+        thinking_level: (Flash only) Thinking effort level.
+                        "minimal" or "High". Default: None (off).
+        use_search: (Flash only) Enable Google Search grounding (web + image).
+                    Default: False.
         output_format: "file" to save to disk and return path,
-                       "base64" to return base64-encoded PNG data. Default: "file".
+                       "base64" to return base64-encoded data. Default: "file".
 
     Returns:
         JSON with edited image path (or base64 data), model response text,
         and metadata.
     """
+    model_id = _resolve_model(model)
+    errors = _validate_params(
+        model_key=model, aspect_ratio=aspect_ratio, image_size=image_size,
+        output_format=output_format, person_generation=person_generation,
+        prominent_people=prominent_people, safety_level=safety_level,
+        thinking_level=thinking_level, temperature=temperature,
+    )
+    if errors:
+        return json.dumps({"errors": errors})
+
     src = Path(image_path)
     if not src.exists():
         return json.dumps({"error": f"Source image not found: {image_path}"})
@@ -321,17 +512,21 @@ def edit_image(
 
     client = _get_client()
     config = _build_config(
+        model_key=model,
         aspect_ratio=aspect_ratio,
         image_size=image_size,
         number_of_images=1,
         person_generation=person_generation,
+        prominent_people=prominent_people,
         temperature=temperature,
         seed=seed,
         safety_level=safety_level,
+        thinking_level=thinking_level,
+        use_search=use_search,
     )
 
     response = client.models.generate_content(
-        model=MODEL_ID,
+        model=model_id,
         contents=[
             types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
             instruction,
@@ -343,9 +538,27 @@ def edit_image(
     result = {
         "instruction": instruction,
         "source_image": image_path,
-        "model": MODEL_ID,
+        "model": model_id,
+        "settings": {
+            "aspect_ratio": aspect_ratio,
+            "image_size": image_size,
+        },
         **extracted,
     }
+    if person_generation:
+        result["settings"]["person_generation"] = person_generation
+    if prominent_people:
+        result["settings"]["prominent_people"] = prominent_people
+    if temperature is not None:
+        result["settings"]["temperature"] = temperature
+    if seed is not None:
+        result["settings"]["seed"] = seed
+    if safety_level:
+        result["settings"]["safety_level"] = safety_level
+    if thinking_level:
+        result["settings"]["thinking_level"] = thinking_level
+    if use_search:
+        result["settings"]["use_search"] = True
 
     return json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -354,49 +567,73 @@ def edit_image(
 def generate_with_references(
     prompt: str,
     reference_paths: list[str],
+    model: str = DEFAULT_MODEL,
     aspect_ratio: str = "1:1",
     image_size: str = "1K",
     number_of_images: int = 1,
     person_generation: Optional[str] = None,
+    prominent_people: Optional[str] = None,
     temperature: Optional[float] = None,
     seed: Optional[int] = None,
     safety_level: Optional[str] = None,
+    thinking_level: Optional[str] = None,
+    use_search: bool = False,
     output_format: str = "file",
 ) -> str:
     """Generate an image using text prompt and reference images for consistency.
 
-    Nano Banana Pro supports up to 14 reference inputs for maintaining
-    character consistency, style matching, and compositional guidance.
+    Use reference images for character consistency, style matching, and
+    compositional guidance.
 
     Args:
         prompt: Text description of the image to generate, referencing
                 the provided images for style/character consistency.
-        reference_paths: List of absolute paths to reference image files
-                         (max 14 images).
+        reference_paths: List of absolute paths to reference image files.
+                         Pro supports up to 14, Flash up to 10.
+        model: Model to use. "flash" (default, Nano Banana 2) or "pro" (Nano Banana Pro).
         aspect_ratio: Aspect ratio of the output image.
-                      Options: "1:1", "2:3", "3:2", "3:4", "4:3",
-                      "9:16", "16:9", "21:9". Default: "1:1".
-        image_size: Output resolution. Options: "1K", "2K", "4K".
-                    Default: "1K".
+                      Common: "1:1", "16:9", "9:16", "3:2", "2:3", "4:3", "3:4", "21:9".
+                      Flash also supports: "1:4", "4:1", "1:8", "8:1", "4:5", "5:4".
+                      Default: "1:1".
+        image_size: Output resolution. "1K", "2K", "4K".
+                    Flash also supports "512px". Default: "1K".
         number_of_images: Number of images to generate (1-4). Default: 1.
         person_generation: Controls people generation.
-                           Options: "DONT_ALLOW", "ALLOW_ADULT", "ALLOW_ALL".
+                           Options: "DONT_ALLOW"/"ALLOW_NONE", "ALLOW_ADULT", "ALLOW_ALL".
                            Default: model default (None).
+        prominent_people: Controls celebrity/prominent person generation.
+                          Options: "ALLOW", "DENY". Default: None.
         temperature: Controls randomness (0.0-2.0). Default: model default (None).
         seed: Random seed for reproducible results. Default: None.
         safety_level: Safety filter threshold applied to all harm categories.
                       Options: "BLOCK_LOW_AND_ABOVE", "BLOCK_MEDIUM_AND_ABOVE",
                       "BLOCK_ONLY_HIGH", "BLOCK_NONE". Default: model default (None).
+        thinking_level: (Flash only) Thinking effort level.
+                        "minimal" or "High". Default: None (off).
+        use_search: (Flash only) Enable Google Search grounding (web + image).
+                    Default: False.
         output_format: "file" to save to disk and return path,
-                       "base64" to return base64-encoded PNG data. Default: "file".
+                       "base64" to return base64-encoded data. Default: "file".
 
     Returns:
         JSON with generated image path(s) (or base64 data), model response text,
         and metadata.
     """
-    if len(reference_paths) > 14:
+    model_id = _resolve_model(model)
+    errors = _validate_params(
+        model_key=model, aspect_ratio=aspect_ratio, image_size=image_size,
+        output_format=output_format, person_generation=person_generation,
+        prominent_people=prominent_people, safety_level=safety_level,
+        thinking_level=thinking_level, number_of_images=number_of_images,
+        temperature=temperature,
+    )
+    if errors:
+        return json.dumps({"errors": errors})
+
+    max_refs = 10 if model.lower() == "flash" else 14
+    if len(reference_paths) > max_refs:
         return json.dumps({
-            "error": "Nano Banana Pro supports a maximum of 14 reference images.",
+            "error": f"{MODELS[model.lower()]} supports a maximum of {max_refs} reference images.",
         })
 
     # Build content parts: reference images + text prompt
@@ -414,17 +651,21 @@ def generate_with_references(
 
     client = _get_client()
     config = _build_config(
+        model_key=model,
         aspect_ratio=aspect_ratio,
         image_size=image_size,
         number_of_images=number_of_images,
         person_generation=person_generation,
+        prominent_people=prominent_people,
         temperature=temperature,
         seed=seed,
         safety_level=safety_level,
+        thinking_level=thinking_level,
+        use_search=use_search,
     )
 
     response = client.models.generate_content(
-        model=MODEL_ID,
+        model=model_id,
         contents=content_parts,
         config=config,
     )
@@ -433,9 +674,28 @@ def generate_with_references(
     result = {
         "prompt": prompt,
         "reference_count": len(reference_paths),
-        "model": MODEL_ID,
+        "model": model_id,
+        "settings": {
+            "aspect_ratio": aspect_ratio,
+            "image_size": image_size,
+            "number_of_images": number_of_images,
+        },
         **extracted,
     }
+    if person_generation:
+        result["settings"]["person_generation"] = person_generation
+    if prominent_people:
+        result["settings"]["prominent_people"] = prominent_people
+    if temperature is not None:
+        result["settings"]["temperature"] = temperature
+    if seed is not None:
+        result["settings"]["seed"] = seed
+    if safety_level:
+        result["settings"]["safety_level"] = safety_level
+    if thinking_level:
+        result["settings"]["thinking_level"] = thinking_level
+    if use_search:
+        result["settings"]["use_search"] = True
 
     return json.dumps(result, ensure_ascii=False, indent=2)
 
@@ -479,25 +739,47 @@ def list_generated_images(limit: int = 20) -> str:
 
 @mcp.tool()
 def get_supported_options() -> str:
-    """Get all supported configuration options for Nano Banana Pro.
+    """Get all supported configuration options for Nano Banana models.
 
     Returns a reference of all available parameters, valid values,
-    and their descriptions.
+    and their descriptions for both Flash and Pro models.
     """
     options = {
-        "model": MODEL_ID,
+        "models": {
+            "flash": {
+                "id": MODELS["flash"],
+                "name": "Nano Banana 2 (Gemini 3.1 Flash Image)",
+                "default": True,
+                "aspect_ratios": sorted(VALID_ASPECT_RATIOS_FLASH),
+                "image_sizes": sorted(VALID_IMAGE_SIZES_FLASH),
+                "max_reference_images": 10,
+                "exclusive_features": ["thinking_level", "use_search"],
+            },
+            "pro": {
+                "id": MODELS["pro"],
+                "name": "Nano Banana Pro (Gemini 3 Pro Image)",
+                "default": False,
+                "aspect_ratios": sorted(VALID_ASPECT_RATIOS_PRO),
+                "image_sizes": sorted(VALID_IMAGE_SIZES_PRO),
+                "max_reference_images": 14,
+                "exclusive_features": [],
+            },
+        },
         "output_dir": str(OUTPUT_DIR),
         "auth_mode": "vertex_ai" if USE_VERTEX_AI else "api_key",
-        "parameters": {
+        "common_parameters": {
+            "model": {
+                "values": sorted(MODELS.keys()),
+                "default": DEFAULT_MODEL,
+                "description": "Model selection: 'flash' (fast, cheap) or 'pro' (highest quality).",
+            },
             "aspect_ratio": {
-                "values": sorted(VALID_ASPECT_RATIOS),
                 "default": "1:1",
-                "description": "Output image aspect ratio.",
+                "description": "Output image aspect ratio. Flash supports more options.",
             },
             "image_size": {
-                "values": sorted(VALID_IMAGE_SIZES),
                 "default": "1K",
-                "description": "Output resolution. 4K for maximum quality.",
+                "description": "Output resolution. Flash also supports '512px'.",
             },
             "number_of_images": {
                 "range": "1-4",
@@ -507,7 +789,12 @@ def get_supported_options() -> str:
             "person_generation": {
                 "values": sorted(VALID_PERSON_GENERATION),
                 "default": "model default",
-                "description": "Controls generation of people/faces.",
+                "description": "Controls generation of people/faces. ALLOW_NONE is an SDK alias for DONT_ALLOW.",
+            },
+            "prominent_people": {
+                "values": sorted(VALID_PROMINENT_PEOPLE),
+                "default": "model default",
+                "description": "Controls generation of celebrity/prominent people. Overridden by person_generation if both set.",
             },
             "temperature": {
                 "range": "0.0-2.0",
@@ -528,6 +815,18 @@ def get_supported_options() -> str:
                 "values": ["file", "base64"],
                 "default": "file",
                 "description": "'file' saves to disk, 'base64' returns encoded data.",
+            },
+        },
+        "flash_only_parameters": {
+            "thinking_level": {
+                "values": sorted(VALID_THINKING_LEVELS),
+                "default": "None (off)",
+                "description": "Thinking effort for better composition. Tokens incur charges.",
+            },
+            "use_search": {
+                "type": "boolean",
+                "default": False,
+                "description": "Enable Google Search grounding for real subjects/places.",
             },
         },
         "env_vars": {
