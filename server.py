@@ -12,6 +12,7 @@ Author: Terry.Kim <goandonh@gmail.com>
 Co-Author: Claudie
 """
 
+import asyncio
 import os
 import json
 import base64
@@ -322,7 +323,7 @@ mcp = FastMCP("nanobanana")
 
 
 @mcp.tool()
-def generate_image(
+async def generate_image(
     prompt: str,
     model: str = DEFAULT_MODEL,
     aspect_ratio: str = "1:1",
@@ -405,7 +406,8 @@ def generate_image(
         use_search=use_search,
     )
 
-    response = client.models.generate_content(
+    response = await asyncio.to_thread(
+        client.models.generate_content,
         model=model_id,
         contents=prompt,
         config=config,
@@ -441,7 +443,7 @@ def generate_image(
 
 
 @mcp.tool()
-def edit_image(
+async def edit_image(
     image_path: str,
     instruction: str,
     model: str = DEFAULT_MODEL,
@@ -526,7 +528,8 @@ def edit_image(
         use_search=use_search,
     )
 
-    response = client.models.generate_content(
+    response = await asyncio.to_thread(
+        client.models.generate_content,
         model=model_id,
         contents=[
             types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
@@ -565,7 +568,7 @@ def edit_image(
 
 
 @mcp.tool()
-def generate_with_references(
+async def generate_with_references(
     prompt: str,
     reference_paths: list[str],
     model: str = DEFAULT_MODEL,
@@ -665,7 +668,8 @@ def generate_with_references(
         use_search=use_search,
     )
 
-    response = client.models.generate_content(
+    response = await asyncio.to_thread(
+        client.models.generate_content,
         model=model_id,
         contents=content_parts,
         config=config,
