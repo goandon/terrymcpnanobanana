@@ -2,7 +2,7 @@
 
 [한국어 문서 (Korean)](README_ko.md)
 
-Image generation and editing MCP server powered by Google's **Nano Banana** models via Vertex AI.
+Image generation and editing MCP server powered by Google's **Nano Banana** models via Gemini API.
 
 > **Nano Banana 2** (Gemini 3.1 Flash Image): `gemini-3.1-flash-image-preview` — fast, cost-effective (default)
 > **Nano Banana Pro** (Gemini 3 Pro Image): `gemini-3-pro-image-preview` — highest quality
@@ -19,9 +19,9 @@ This MCP (Model Context Protocol) server exposes Google's Nano Banana image gene
 - **Reference-based Generation** — Maintain character/style consistency with reference images (Flash: 10, Pro: 14)
 - **Thinking Mode** — (Flash only) Enable reasoning for better composition quality
 - **Search Grounding** — (Flash only) Google Search integration for accurate real-world subjects
-- **Full Parameter Control** — Resolution, aspect ratio, person generation, temperature, seed, safety levels
+- **Full Parameter Control** — Resolution, aspect ratio, temperature, seed, safety levels
 - **Input Validation** — All parameters validated locally before API calls with clear error messages
-- **Dual Auth** — Vertex AI (ADC) or Gemini API Key
+- **Gemini API Key** — Simple API key authentication (no GCP project required)
 
 ## Model Comparison
 
@@ -49,25 +49,14 @@ pip install -r requirements.txt
 | Package | Version | Purpose |
 |---------|---------|---------|
 | `fastmcp` | >= 2.0.0 | MCP server framework |
-| `google-genai` | >= 1.0.0 | Google Gen AI SDK (Vertex AI / Gemini API) |
+| `google-genai` | >= 1.0.0 | Google Gen AI SDK |
 | `Pillow` | >= 10.0.0 | Image processing |
 
 ## Authentication
 
-### Option 1: Vertex AI (Production, recommended)
+Get your API key from [Google AI Studio](https://aistudio.google.com/apikey).
 
 ```bash
-gcloud auth application-default login
-
-export GOOGLE_CLOUD_PROJECT=your-project-id
-export GOOGLE_CLOUD_LOCATION=global
-export GOOGLE_GENAI_USE_VERTEXAI=true
-```
-
-### Option 2: Gemini API Key (Development)
-
-```bash
-export GOOGLE_GENAI_USE_VERTEXAI=false
 export GEMINI_API_KEY=your-api-key-here
 ```
 
@@ -75,7 +64,6 @@ export GEMINI_API_KEY=your-api-key-here
 
 ### Claude Desktop (`claude_desktop_config.json`)
 
-**Vertex AI mode:**
 ```json
 {
   "mcpServers": {
@@ -83,25 +71,6 @@ export GEMINI_API_KEY=your-api-key-here
       "command": "python",
       "args": ["/path/to/terrymcpnanobanana/server.py"],
       "env": {
-        "GOOGLE_CLOUD_PROJECT": "your-project-id",
-        "GOOGLE_CLOUD_LOCATION": "global",
-        "GOOGLE_GENAI_USE_VERTEXAI": "true",
-        "NANOBANANA_OUTPUT_DIR": "/path/to/output/folder"
-      }
-    }
-  }
-}
-```
-
-**API Key mode:**
-```json
-{
-  "mcpServers": {
-    "nanobanana": {
-      "command": "python",
-      "args": ["/path/to/terrymcpnanobanana/server.py"],
-      "env": {
-        "GOOGLE_GENAI_USE_VERTEXAI": "false",
         "GEMINI_API_KEY": "your-api-key-here",
         "NANOBANANA_OUTPUT_DIR": "/path/to/output/folder"
       }
@@ -110,7 +79,7 @@ export GEMINI_API_KEY=your-api-key-here
 }
 ```
 
-### Claude Code (`.claude/settings.json`)
+### Claude Code (`.mcp.json`)
 
 ```json
 {
@@ -119,15 +88,15 @@ export GEMINI_API_KEY=your-api-key-here
       "command": "python",
       "args": ["/path/to/terrymcpnanobanana/server.py"],
       "env": {
-        "GOOGLE_CLOUD_PROJECT": "your-project-id",
-        "GOOGLE_GENAI_USE_VERTEXAI": "true"
+        "GEMINI_API_KEY": "your-api-key-here",
+        "NANOBANANA_OUTPUT_DIR": "/path/to/output/folder"
       }
     }
   }
 }
 ```
 
-### Windows (Python full path)
+### Windows
 
 ```json
 {
@@ -136,8 +105,7 @@ export GEMINI_API_KEY=your-api-key-here
       "command": "C:\\Users\\terry\\AppData\\Local\\Programs\\Python\\Python313\\python.exe",
       "args": ["C:\\path\\to\\terrymcpnanobanana\\server.py"],
       "env": {
-        "GOOGLE_CLOUD_PROJECT": "your-project-id",
-        "GOOGLE_GENAI_USE_VERTEXAI": "true",
+        "GEMINI_API_KEY": "your-api-key-here",
         "NANOBANANA_OUTPUT_DIR": "D:\\Images\\nanobanana"
       }
     }
@@ -228,22 +196,112 @@ Returns all supported parameters and valid values for both models. No arguments 
 | `thinking_level` | `minimal`, `High` | None (off) | Thinking mode for better composition. Incurs token charges |
 | `use_search` | `true`, `false` | `false` | Google Search grounding for real subjects/places |
 
-### Safety & Content
+### Safety
 
 | Parameter | Options | Default | Description |
 |-----------|---------|---------|-------------|
-| `person_generation` | `DONT_ALLOW`/`ALLOW_NONE`, `ALLOW_ADULT`, `ALLOW_ALL` | model default | People/face generation control |
-| `prominent_people` | `ALLOW`, `DENY` | model default | Celebrity/prominent person generation control |
 | `safety_level` | `BLOCK_LOW_AND_ABOVE`, `BLOCK_MEDIUM_AND_ABOVE`, `BLOCK_ONLY_HIGH`, `BLOCK_NONE` | model default | Safety filter threshold (all harm categories) |
+
+## Nano Banana 2 (Gemini 3.1 Flash Image) — Detailed Guide
+
+Nano Banana 2 is the default model (`gemini-3.1-flash-image-preview`), based on **Gemini 3.1 Flash** with native image generation capabilities.
+
+### Resolution & Output
+
+| `image_size` | Pixel Resolution | Use Case |
+|-------------|-----------------|----------|
+| `512px` | 512 x 512 | Thumbnails, quick previews, emoji |
+| `1K` | 1024 x 1024 | Standard quality (default) |
+| `2K` | 2048 x 2048 | High quality prints, detailed work |
+| `4K` | 4096 x 4096 | Maximum quality, large format |
+
+Actual pixel dimensions vary by aspect ratio. The `image_size` controls the **long edge** resolution.
+
+### Aspect Ratios (14 Options)
+
+| Ratio | Orientation | Common Use |
+|-------|-------------|------------|
+| `1:1` | Square | Instagram, profile pictures |
+| `3:2` | Landscape | Standard photo (35mm film ratio) |
+| `4:3` | Landscape | Classic 4:3 display, tablets |
+| `16:9` | Wide landscape | YouTube thumbnails, monitors |
+| `21:9` | Ultra-wide | Cinematic, banner images |
+| `2:3` | Portrait | Vertical photo |
+| `3:4` | Portrait | Vertical display |
+| `9:16` | Tall portrait | Instagram Stories, Reels, TikTok |
+| `4:5` | Portrait | Instagram portrait post |
+| `5:4` | Landscape | Slight landscape |
+| `4:1` | Panoramic | Ultra-wide banner |
+| `8:1` | Extreme panoramic | Website header strip |
+| `1:4` | Tall vertical | Vertical banner |
+| `1:8` | Extreme vertical | Vertical strip |
+
+### Thinking Mode
+
+Flash supports a built-in thinking/reasoning mode that improves compositional quality. The model "thinks" about layout, composition, and visual coherence before generating.
+
+| `thinking_level` | Effect | Token Cost |
+|-------------------|--------|-----------|
+| `None` (default) | Standard generation — no reasoning step | No extra cost |
+| `minimal` | Light reasoning — slight quality improvement | Low |
+| `High` | Deep reasoning — best composition, coherent multi-object scenes | Higher |
+
+**When to use thinking:**
+- Complex scenes with multiple subjects or objects
+- Precise spatial relationships ("cat on top of a bookshelf, next to a lamp")
+- Photorealistic scenes requiring natural composition
+- NOT needed for simple prompts ("a red apple on white background")
+
+### Search Grounding
+
+Flash can use Google Search (web + image) to ground generation in real-world knowledge.
+
+```
+use_search: true
+```
+
+**When to use search grounding:**
+- Real landmarks: "Eiffel Tower at sunset" — gets accurate architecture
+- Real products: "2024 MacBook Pro on a desk" — correct product details
+- Real places: "Shibuya Crossing at night" — accurate scene
+- Real animals/plants: "Golden Retriever puppy" — breed-accurate features
+- NOT needed for fictional/abstract content
+
+### Reference Images (Character Consistency)
+
+Flash supports up to **10 reference images** for maintaining character/style consistency across multiple generations.
+
+**Best practices:**
+- Include multiple angles of the same character (front, side, 3/4)
+- Use consistent lighting across references
+- Higher quality references = better output consistency
+- Character sheets (multi-angle on one image) work well
+- Combine with a detailed prompt describing the character
+
+**Reference image formats:** PNG, JPEG, WebP, GIF
+
+### Prompting Tips for Flash
+
+1. **Be specific about style:** "photorealistic 35mm film photograph" vs "watercolor painting" vs "anime illustration"
+2. **Describe lighting:** "soft golden hour light", "harsh studio flash", "neon city lights"
+3. **Camera details work:** "shot on Canon EOS R5, 85mm f/1.4, shallow depth of field"
+4. **Negative instructions:** "no text, no watermark, no borders"
+5. **Composition hints:** "rule of thirds", "centered composition", "bird's eye view"
+6. **For people:** Include ethnicity, age range, clothing details, expression, pose
+7. **Combine thinking + search:** For photorealistic real-world scenes, enable both for best results
+
+### Limitations
+
+- **Safety filters:** Gemini API applies content safety filters that may block certain prompts (bedroom + revealing clothing combinations, explicit violence). Use `safety_level: "BLOCK_ONLY_HIGH"` to relax, or adjust your prompt.
+- **No `person_generation` / `prominent_people` control:** These parameters are only available in Vertex AI mode. API key mode uses model defaults.
+- **No `output_mime_type` / compression quality control:** Output format is determined by the API in key mode. Images are saved as JPEG.
+- **Text in images:** The model can render text but accuracy varies. Short words/titles work better than long sentences.
 
 ## Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GOOGLE_CLOUD_PROJECT` | Vertex AI mode | `""` | GCP project ID |
-| `GOOGLE_CLOUD_LOCATION` | No | `global` | GCP region |
-| `GOOGLE_GENAI_USE_VERTEXAI` | No | `true` | `true`: Vertex AI, `false`: API Key |
-| `GEMINI_API_KEY` | API Key mode | — | Gemini API key |
+| `GEMINI_API_KEY` | Yes | — | Gemini API key from [AI Studio](https://aistudio.google.com/apikey) |
 | `NANOBANANA_OUTPUT_DIR` | No | `~/nanobanana_output` | Image output directory |
 
 ## Output
@@ -317,33 +375,24 @@ terrymcpnanobanana/
 - **Local validation** — `_validate_params()` checks all inputs before API calls
 - **Model-specific constraints** — Aspect ratios, image sizes, reference limits per model
 - **Centralized constants** — All valid values and defaults defined at module top
-- **Dual auth** — Single env var toggles between Vertex AI and API Key
+- **Async tool handlers** — Blocking API calls wrapped in `asyncio.to_thread()` for Windows compatibility
 
 ## Troubleshooting
 
 ### Authentication Error
 
 ```
-google.auth.exceptions.DefaultCredentialsError
+google.api_core.exceptions.PermissionDenied
 ```
 
-- Vertex AI: Run `gcloud auth application-default login`
-- API Key: Check `GEMINI_API_KEY` environment variable
-
-### Model Not Found
-
-```
-Model gemini-3.1-flash-image-preview not found
-```
-
-- Verify Gemini API is enabled in your Vertex AI project
-- Set `GOOGLE_CLOUD_LOCATION` to `global` or `us-central1`
-- If Flash is not yet available, fall back with `model="pro"`
+- Check `GEMINI_API_KEY` environment variable is set correctly
+- Verify the API key is valid at [AI Studio](https://aistudio.google.com/apikey)
 
 ### Safety Filter Blocked
 
 - Set `safety_level` to `BLOCK_ONLY_HIGH` to relax filtering
 - Modify prompt to remove sensitive content
+- Bedroom + revealing clothing combinations are commonly blocked
 
 ### Output Directory Permission
 
@@ -353,6 +402,27 @@ PermissionError: [Errno 13] Permission denied
 
 - Verify write permissions on `NANOBANANA_OUTPUT_DIR` path
 - Directory is auto-created if it doesn't exist (parent must be writable)
+
+### Windows MCP Not Responding
+
+If the MCP server connects but tool calls hang or fail silently on Windows:
+- Ensure you're using the latest version with async tool handlers (`asyncio.to_thread()`)
+- Use the full Python path in the MCP config
+- Check that `GEMINI_API_KEY` is set (not Vertex AI mode)
+
+## Changelog
+
+### v0.2.0 (2026-03-06)
+- **BREAKING**: Removed Vertex AI authentication — API key mode only
+- Removed `person_generation` and `prominent_people` parameters (Vertex AI only)
+- Removed `output_mime_type` and `output_compression_quality` (Vertex AI only)
+- Added `__version__` tracking
+- Async tool handlers for Windows compatibility (`asyncio.to_thread()`)
+
+### v0.1.0
+- Initial release with dual auth (Vertex AI + API Key)
+- 5 tools: generate_image, edit_image, generate_with_references, list_generated_images, get_supported_options
+- Dual model support (Flash + Pro)
 
 ---
 

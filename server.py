@@ -1,8 +1,8 @@
 """
-Nano Banana MCP Server - Image generation and editing via Vertex AI.
+Nano Banana MCP Server - Image generation and editing via Gemini API.
 
 Provides MCP tools for generating and editing images using Google's
-Nano Banana models (Pro and Flash/Nano Banana 2) through the Vertex AI API.
+Nano Banana models (Pro and Flash/Nano Banana 2) through the Gemini API.
 
 Supported models:
   - Nano Banana 2 (Gemini 3.1 Flash Image) — fast, cost-effective (default)
@@ -10,7 +10,11 @@ Supported models:
 
 Author: Terry.Kim <goandonh@gmail.com>
 Co-Author: Claudie
+
+Version: 0.2.0
 """
+
+__version__ = "0.2.0"
 
 import asyncio
 import os
@@ -42,10 +46,8 @@ OUTPUT_DIR = Path(os.environ.get(
     str(Path.home() / "nanobanana_output"),
 ))
 
-# Vertex AI settings (can be set via env vars)
-VERTEX_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
-VERTEX_LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
-USE_VERTEX_AI = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "true").lower() == "true"
+# Gemini API key (set via GEMINI_API_KEY env var)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 # Valid option values (model-specific)
 VALID_ASPECT_RATIOS_FLASH = {
@@ -59,13 +61,6 @@ VALID_IMAGE_SIZES_PRO = {"1K", "2K", "4K"}
 
 VALID_THINKING_LEVELS = {"minimal", "High"}
 
-VALID_PERSON_GENERATION = {
-    "DONT_ALLOW",
-    "ALLOW_NONE",  # SDK alias for DONT_ALLOW
-    "ALLOW_ADULT",
-    "ALLOW_ALL",
-}
-VALID_PROMINENT_PEOPLE = {"ALLOW", "DENY"}
 VALID_SAFETY_LEVELS = {
     "BLOCK_LOW_AND_ABOVE",
     "BLOCK_MEDIUM_AND_ABOVE",
@@ -73,10 +68,6 @@ VALID_SAFETY_LEVELS = {
     "BLOCK_NONE",
 }
 VALID_OUTPUT_FORMATS = {"file", "base64"}
-
-# Image output defaults
-OUTPUT_MIME_TYPE = "image/jpeg"
-OUTPUT_COMPRESSION_QUALITY = 85
 
 MIME_MAP = {
     ".png": "image/png",
@@ -94,18 +85,15 @@ _client = None
 
 
 def _get_client() -> genai.Client:
-    """Lazy-initialize the GenAI client."""
+    """Lazy-initialize the GenAI client (Gemini API key mode)."""
     global _client
     if _client is None:
-        if USE_VERTEX_AI:
-            _client = genai.Client(
-                vertexai=True,
-                project=VERTEX_PROJECT,
-                location=VERTEX_LOCATION,
+        if not GEMINI_API_KEY:
+            raise RuntimeError(
+                "GEMINI_API_KEY environment variable is not set. "
+                "Get your key at https://aistudio.google.com/apikey"
             )
-        else:
-            # Uses GEMINI_API_KEY env var automatically
-            _client = genai.Client()
+        _client = genai.Client(api_key=GEMINI_API_KEY)
     return _client
 
 
@@ -124,8 +112,6 @@ def _validate_params(
     aspect_ratio: str,
     image_size: str,
     output_format: str = "file",
-    person_generation: Optional[str] = None,
-    prominent_people: Optional[str] = None,
     safety_level: Optional[str] = None,
     thinking_level: Optional[str] = None,
     number_of_images: int = 1,
@@ -150,16 +136,6 @@ def _validate_params(
     if output_format not in VALID_OUTPUT_FORMATS:
         errors.append(
             f"Invalid output_format '{output_format}'. Valid: {sorted(VALID_OUTPUT_FORMATS)}"
-        )
-    if person_generation is not None and person_generation not in VALID_PERSON_GENERATION:
-        errors.append(
-            f"Invalid person_generation '{person_generation}'. "
-            f"Valid: {sorted(VALID_PERSON_GENERATION)}"
-        )
-    if prominent_people is not None and prominent_people not in VALID_PROMINENT_PEOPLE:
-        errors.append(
-            f"Invalid prominent_people '{prominent_people}'. "
-            f"Valid: {sorted(VALID_PROMINENT_PEOPLE)}"
         )
     if safety_level is not None and safety_level not in VALID_SAFETY_LEVELS:
         errors.append(
@@ -203,30 +179,19 @@ def _build_config(
     aspect_ratio: str = "1:1",
     image_size: str = "1K",
     number_of_images: int = 1,
-    person_generation: Optional[str] = None,
-    prominent_people: Optional[str] = None,
     temperature: Optional[float] = None,
     seed: Optional[int] = None,
     safety_level: Optional[str] = None,
     thinking_level: Optional[str] = None,
     use_search: bool = False,
 ) -> types.GenerateContentConfig:
-    """Build GenerateContentConfig with full ImageConfig options."""
+    """Build GenerateContentConfig for Gemini API key mode."""
     is_flash = model_key.lower() == "flash"
 
     image_cfg_kwargs = {
         "aspect_ratio": aspect_ratio,
         "image_size": image_size,
     }
-
-    # These parameters are Vertex AI only — the SDK raises errors in API key mode.
-    if USE_VERTEX_AI:
-        image_cfg_kwargs["output_mime_type"] = OUTPUT_MIME_TYPE
-        image_cfg_kwargs["output_compression_quality"] = OUTPUT_COMPRESSION_QUALITY
-        if person_generation is not None:
-            image_cfg_kwargs["person_generation"] = person_generation
-        if prominent_people is not None:
-            image_cfg_kwargs["prominent_people"] = prominent_people
 
     config_kwargs = {
         "response_modalities": ["TEXT", "IMAGE"],
@@ -280,6 +245,27 @@ def _build_config(
     return types.GenerateContentConfig(**config_kwargs)
 
 
+def _add_optional_settings(
+    settings: dict,
+    temperature: Optional[float] = None,
+    seed: Optional[int] = None,
+    safety_level: Optional[str] = None,
+    thinking_level: Optional[str] = None,
+    use_search: bool = False,
+) -> None:
+    """Add non-default optional settings to a result's settings dict."""
+    if temperature is not None:
+        settings["temperature"] = temperature
+    if seed is not None:
+        settings["seed"] = seed
+    if safety_level:
+        settings["safety_level"] = safety_level
+    if thinking_level:
+        settings["thinking_level"] = thinking_level
+    if use_search:
+        settings["use_search"] = True
+
+
 def _extract_results(response, output_format: str, prefix: str) -> dict:
     """Extract text and images from a generate_content response."""
     images = []
@@ -329,8 +315,6 @@ async def generate_image(
     aspect_ratio: str = "1:1",
     image_size: str = "1K",
     number_of_images: int = 1,
-    person_generation: Optional[str] = None,
-    prominent_people: Optional[str] = None,
     temperature: Optional[float] = None,
     seed: Optional[int] = None,
     safety_level: Optional[str] = None,
@@ -355,12 +339,6 @@ async def generate_image(
         image_size: Output resolution. "1K", "2K", "4K".
                     Flash also supports "512px". Default: "1K".
         number_of_images: Number of images to generate (1-4). Default: 1.
-        person_generation: Controls people generation.
-                           Options: "DONT_ALLOW"/"ALLOW_NONE", "ALLOW_ADULT", "ALLOW_ALL".
-                           Default: model default (None).
-        prominent_people: Controls celebrity/prominent person generation separately.
-                          Options: "ALLOW", "DENY". Overridden by person_generation
-                          if both are set. Default: None.
         temperature: Controls randomness (0.0-2.0). Google recommends 1.0
                      for image generation. Default: model default (None).
         seed: Random seed for reproducible results. Use the same seed
@@ -383,8 +361,7 @@ async def generate_image(
     model_id = _resolve_model(model)
     errors = _validate_params(
         model_key=model, aspect_ratio=aspect_ratio, image_size=image_size,
-        output_format=output_format, person_generation=person_generation,
-        prominent_people=prominent_people, safety_level=safety_level,
+        output_format=output_format, safety_level=safety_level,
         thinking_level=thinking_level, number_of_images=number_of_images,
         temperature=temperature,
     )
@@ -397,8 +374,6 @@ async def generate_image(
         aspect_ratio=aspect_ratio,
         image_size=image_size,
         number_of_images=number_of_images,
-        person_generation=person_generation,
-        prominent_people=prominent_people,
         temperature=temperature,
         seed=seed,
         safety_level=safety_level,
@@ -424,21 +399,11 @@ async def generate_image(
         },
         **extracted,
     }
-    if person_generation:
-        result["settings"]["person_generation"] = person_generation
-    if prominent_people:
-        result["settings"]["prominent_people"] = prominent_people
-    if temperature is not None:
-        result["settings"]["temperature"] = temperature
-    if seed is not None:
-        result["settings"]["seed"] = seed
-    if safety_level:
-        result["settings"]["safety_level"] = safety_level
-    if thinking_level:
-        result["settings"]["thinking_level"] = thinking_level
-    if use_search:
-        result["settings"]["use_search"] = True
-
+    _add_optional_settings(
+        result["settings"], temperature=temperature, seed=seed,
+        safety_level=safety_level, thinking_level=thinking_level,
+        use_search=use_search,
+    )
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -449,8 +414,6 @@ async def edit_image(
     model: str = DEFAULT_MODEL,
     aspect_ratio: str = "1:1",
     image_size: str = "1K",
-    person_generation: Optional[str] = None,
-    prominent_people: Optional[str] = None,
     temperature: Optional[float] = None,
     seed: Optional[int] = None,
     safety_level: Optional[str] = None,
@@ -475,11 +438,6 @@ async def edit_image(
                       Default: "1:1".
         image_size: Output resolution. "1K", "2K", "4K".
                     Flash also supports "512px". Default: "1K".
-        person_generation: Controls people generation.
-                           Options: "DONT_ALLOW"/"ALLOW_NONE", "ALLOW_ADULT", "ALLOW_ALL".
-                           Default: model default (None).
-        prominent_people: Controls celebrity/prominent person generation.
-                          Options: "ALLOW", "DENY". Default: None.
         temperature: Controls randomness (0.0-2.0). Default: model default (None).
         seed: Random seed for reproducible results. Default: None.
         safety_level: Safety filter threshold applied to all harm categories.
@@ -499,8 +457,7 @@ async def edit_image(
     model_id = _resolve_model(model)
     errors = _validate_params(
         model_key=model, aspect_ratio=aspect_ratio, image_size=image_size,
-        output_format=output_format, person_generation=person_generation,
-        prominent_people=prominent_people, safety_level=safety_level,
+        output_format=output_format, safety_level=safety_level,
         thinking_level=thinking_level, temperature=temperature,
     )
     if errors:
@@ -508,9 +465,8 @@ async def edit_image(
 
     src = Path(image_path)
     if not src.exists():
-        return json.dumps({"error": f"Source image not found: {image_path}"})
+        return json.dumps({"errors": [f"Source image not found: {image_path}"]})
 
-    image_bytes = src.read_bytes()
     mime_type = MIME_MAP.get(src.suffix.lower(), "image/png")
 
     client = _get_client()
@@ -519,8 +475,6 @@ async def edit_image(
         aspect_ratio=aspect_ratio,
         image_size=image_size,
         number_of_images=1,
-        person_generation=person_generation,
-        prominent_people=prominent_people,
         temperature=temperature,
         seed=seed,
         safety_level=safety_level,
@@ -528,15 +482,18 @@ async def edit_image(
         use_search=use_search,
     )
 
-    response = await asyncio.to_thread(
-        client.models.generate_content,
-        model=model_id,
-        contents=[
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            instruction,
-        ],
-        config=config,
-    )
+    def _call():
+        image_bytes = src.read_bytes()
+        return client.models.generate_content(
+            model=model_id,
+            contents=[
+                types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                instruction,
+            ],
+            config=config,
+        )
+
+    response = await asyncio.to_thread(_call)
 
     extracted = _extract_results(response, output_format, prefix="edit")
     result = {
@@ -549,21 +506,11 @@ async def edit_image(
         },
         **extracted,
     }
-    if person_generation:
-        result["settings"]["person_generation"] = person_generation
-    if prominent_people:
-        result["settings"]["prominent_people"] = prominent_people
-    if temperature is not None:
-        result["settings"]["temperature"] = temperature
-    if seed is not None:
-        result["settings"]["seed"] = seed
-    if safety_level:
-        result["settings"]["safety_level"] = safety_level
-    if thinking_level:
-        result["settings"]["thinking_level"] = thinking_level
-    if use_search:
-        result["settings"]["use_search"] = True
-
+    _add_optional_settings(
+        result["settings"], temperature=temperature, seed=seed,
+        safety_level=safety_level, thinking_level=thinking_level,
+        use_search=use_search,
+    )
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -575,8 +522,6 @@ async def generate_with_references(
     aspect_ratio: str = "1:1",
     image_size: str = "1K",
     number_of_images: int = 1,
-    person_generation: Optional[str] = None,
-    prominent_people: Optional[str] = None,
     temperature: Optional[float] = None,
     seed: Optional[int] = None,
     safety_level: Optional[str] = None,
@@ -602,11 +547,6 @@ async def generate_with_references(
         image_size: Output resolution. "1K", "2K", "4K".
                     Flash also supports "512px". Default: "1K".
         number_of_images: Number of images to generate (1-4). Default: 1.
-        person_generation: Controls people generation.
-                           Options: "DONT_ALLOW"/"ALLOW_NONE", "ALLOW_ADULT", "ALLOW_ALL".
-                           Default: model default (None).
-        prominent_people: Controls celebrity/prominent person generation.
-                          Options: "ALLOW", "DENY". Default: None.
         temperature: Controls randomness (0.0-2.0). Default: model default (None).
         seed: Random seed for reproducible results. Default: None.
         safety_level: Safety filter threshold applied to all harm categories.
@@ -626,8 +566,7 @@ async def generate_with_references(
     model_id = _resolve_model(model)
     errors = _validate_params(
         model_key=model, aspect_ratio=aspect_ratio, image_size=image_size,
-        output_format=output_format, person_generation=person_generation,
-        prominent_people=prominent_people, safety_level=safety_level,
+        output_format=output_format, safety_level=safety_level,
         thinking_level=thinking_level, number_of_images=number_of_images,
         temperature=temperature,
     )
@@ -637,21 +576,16 @@ async def generate_with_references(
     max_refs = 10 if model.lower() == "flash" else 14
     if len(reference_paths) > max_refs:
         return json.dumps({
-            "error": f"{MODELS[model.lower()]} supports a maximum of {max_refs} reference images.",
+            "errors": [f"{MODELS[model.lower()]} supports a maximum of {max_refs} reference images."],
         })
 
-    # Build content parts: reference images + text prompt
-    content_parts = []
+    # Validate reference paths exist before offloading to thread
+    ref_mimes = []
     for ref_path in reference_paths:
         ref = Path(ref_path)
         if not ref.exists():
-            return json.dumps({"error": f"Reference image not found: {ref_path}"})
-        mime_type = MIME_MAP.get(ref.suffix.lower(), "image/png")
-        content_parts.append(
-            types.Part.from_bytes(data=ref.read_bytes(), mime_type=mime_type)
-        )
-
-    content_parts.append(prompt)
+            return json.dumps({"errors": [f"Reference image not found: {ref_path}"]})
+        ref_mimes.append((ref, MIME_MAP.get(ref.suffix.lower(), "image/png")))
 
     client = _get_client()
     config = _build_config(
@@ -659,8 +593,6 @@ async def generate_with_references(
         aspect_ratio=aspect_ratio,
         image_size=image_size,
         number_of_images=number_of_images,
-        person_generation=person_generation,
-        prominent_people=prominent_people,
         temperature=temperature,
         seed=seed,
         safety_level=safety_level,
@@ -668,12 +600,18 @@ async def generate_with_references(
         use_search=use_search,
     )
 
-    response = await asyncio.to_thread(
-        client.models.generate_content,
-        model=model_id,
-        contents=content_parts,
-        config=config,
-    )
+    def _call():
+        content_parts = []
+        for ref, mime_type in ref_mimes:
+            content_parts.append(
+                types.Part.from_bytes(data=ref.read_bytes(), mime_type=mime_type)
+            )
+        content_parts.append(prompt)
+        return client.models.generate_content(
+            model=model_id, contents=content_parts, config=config,
+        )
+
+    response = await asyncio.to_thread(_call)
 
     extracted = _extract_results(response, output_format, prefix="ref")
     result = {
@@ -687,26 +625,16 @@ async def generate_with_references(
         },
         **extracted,
     }
-    if person_generation:
-        result["settings"]["person_generation"] = person_generation
-    if prominent_people:
-        result["settings"]["prominent_people"] = prominent_people
-    if temperature is not None:
-        result["settings"]["temperature"] = temperature
-    if seed is not None:
-        result["settings"]["seed"] = seed
-    if safety_level:
-        result["settings"]["safety_level"] = safety_level
-    if thinking_level:
-        result["settings"]["thinking_level"] = thinking_level
-    if use_search:
-        result["settings"]["use_search"] = True
-
+    _add_optional_settings(
+        result["settings"], temperature=temperature, seed=seed,
+        safety_level=safety_level, thinking_level=thinking_level,
+        use_search=use_search,
+    )
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
 @mcp.tool()
-def list_generated_images(limit: int = 20) -> str:
+async def list_generated_images(limit: int = 20) -> str:
     """List recently generated images in the output directory.
 
     Args:
@@ -715,30 +643,31 @@ def list_generated_images(limit: int = 20) -> str:
     Returns:
         JSON with list of image files sorted by modification time (newest first).
     """
-    out_dir = _ensure_output_dir()
-    image_exts = {".png", ".jpg", ".jpeg", ".webp"}
+    def _scan():
+        out_dir = _ensure_output_dir()
+        image_exts = {".png", ".jpg", ".jpeg", ".webp"}
+        entries = []
+        for f in out_dir.iterdir():
+            if f.is_file() and f.suffix.lower() in image_exts:
+                st = f.stat()
+                entries.append((f, st))
+        entries.sort(key=lambda e: e[1].st_mtime, reverse=True)
+        return out_dir, entries[:limit]
 
-    files = [
-        f for f in out_dir.iterdir()
-        if f.is_file() and f.suffix.lower() in image_exts
-    ]
-    files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
-    files = files[:limit]
-
+    out_dir, entries = await asyncio.to_thread(_scan)
     result = {
         "output_dir": str(out_dir),
-        "count": len(files),
+        "count": len(entries),
         "files": [
             {
                 "name": f.name,
                 "path": str(f),
-                "size_kb": round(f.stat().st_size / 1024, 1),
-                "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+                "size_kb": round(st.st_size / 1024, 1),
+                "modified": datetime.fromtimestamp(st.st_mtime).isoformat(),
             }
-            for f in files
+            for f, st in entries
         ],
     }
-
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
@@ -771,7 +700,8 @@ def get_supported_options() -> str:
             },
         },
         "output_dir": str(OUTPUT_DIR),
-        "auth_mode": "vertex_ai" if USE_VERTEX_AI else "api_key",
+        "version": __version__,
+        "auth_mode": "gemini_api_key",
         "common_parameters": {
             "model": {
                 "values": sorted(MODELS.keys()),
@@ -790,16 +720,6 @@ def get_supported_options() -> str:
                 "range": "1-4",
                 "default": 1,
                 "description": "Number of images to generate per request.",
-            },
-            "person_generation": {
-                "values": sorted(VALID_PERSON_GENERATION),
-                "default": "model default",
-                "description": "Controls generation of people/faces. ALLOW_NONE is an SDK alias for DONT_ALLOW.",
-            },
-            "prominent_people": {
-                "values": sorted(VALID_PROMINENT_PEOPLE),
-                "default": "model default",
-                "description": "Controls generation of celebrity/prominent people. Overridden by person_generation if both set.",
             },
             "temperature": {
                 "range": "0.0-2.0",
@@ -836,10 +756,7 @@ def get_supported_options() -> str:
         },
         "env_vars": {
             "NANOBANANA_OUTPUT_DIR": "Override output directory path.",
-            "GOOGLE_CLOUD_PROJECT": "GCP project ID (Vertex AI mode).",
-            "GOOGLE_CLOUD_LOCATION": "GCP region (default: global).",
-            "GOOGLE_GENAI_USE_VERTEXAI": "Set 'true' for Vertex AI, 'false' for API key.",
-            "GEMINI_API_KEY": "Gemini API key (when not using Vertex AI).",
+            "GEMINI_API_KEY": "Gemini API key (required).",
         },
     }
 
