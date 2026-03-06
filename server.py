@@ -11,10 +11,10 @@ Supported models:
 Author: Terry.Kim <goandonh@gmail.com>
 Co-Author: Claudie
 
-Version: 0.2.0
+Version: 0.2.1
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 import asyncio
 import os
@@ -23,7 +23,7 @@ import base64
 import uuid
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 
 from fastmcp import FastMCP
 from google import genai
@@ -517,7 +517,7 @@ async def edit_image(
 @mcp.tool()
 async def generate_with_references(
     prompt: str,
-    reference_paths: list[str],
+    reference_paths: Union[list[str], str],
     model: str = DEFAULT_MODEL,
     aspect_ratio: str = "1:1",
     image_size: str = "1K",
@@ -537,7 +537,8 @@ async def generate_with_references(
     Args:
         prompt: Text description of the image to generate, referencing
                 the provided images for style/character consistency.
-        reference_paths: List of absolute paths to reference image files.
+        reference_paths: List of absolute paths to reference image files
+                         (also accepts a JSON-encoded string array).
                          Pro supports up to 14, Flash up to 10.
         model: Model to use. "flash" (default, Nano Banana 2) or "pro" (Nano Banana Pro).
         aspect_ratio: Aspect ratio of the output image.
@@ -572,6 +573,15 @@ async def generate_with_references(
     )
     if errors:
         return json.dumps({"errors": errors})
+
+    # MCP transports may serialize list params as a JSON string — parse if needed
+    if isinstance(reference_paths, str):
+        try:
+            reference_paths = json.loads(reference_paths)
+        except (json.JSONDecodeError, TypeError):
+            return json.dumps({"errors": ["reference_paths must be a JSON array of file paths."]})
+        if not isinstance(reference_paths, list):
+            return json.dumps({"errors": ["reference_paths must be a list of file paths."]})
 
     max_refs = 10 if model.lower() == "flash" else 14
     if len(reference_paths) > max_refs:
