@@ -1,5 +1,9 @@
 # Nano Banana MCP Server
 
+> **지원 종료**: 이 프로젝트는 [terry-media](https://github.com/goandon/terry-media)로 통합되었습니다. xAI, Gemini, Veo, Qwen, ElevenLabs 등을 하나의 서버로 통합한 terry-media를 사용해 주세요. 이 저장소는 참고용으로 아카이브됩니다.
+
+---
+
 [English Documentation](README.md)
 
 Vertex AI 기반 **Nano Banana** 이미지 생성/편집 MCP 서버.

@@ -1,5 +1,9 @@
 # Nano Banana MCP Server
 
+> **DEPRECATED**: This project has been merged into [terry-media](https://github.com/goandon/terry-media), a unified MCP server that combines xAI, Gemini, Veo, Qwen, ElevenLabs, and more into a single server. Please use terry-media instead. This repo is archived for reference only.
+
+---
+
 [한국어 문서 (Korean)](README_ko.md)
 
 Image generation and editing MCP server powered by Google's **Nano Banana** models via Gemini API.
